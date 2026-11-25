@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [修复] 镜像更新兼容 Docker Compose 2.26.1，移除 `run/up --pull` 参数，改由实例配置 `pull_policy: never` 限定使用已加载的本地镜像，认证预检与回滚保持相同策略。
+- [修复] 镜像更新脚本移除不兼容的 `config --no-env-resolution`，使用常规 Compose 配置解析，并避免将 `deployment.env` 中的动态变量固定在实例覆盖文件中。
+- [改进] 本地镜像打包固定使用 `daily_stock_analysis:latest` 标签并覆盖 `dist/docker-image/` 下的导出文件，项目 Compose 不再需要 `DSA_IMAGE`；服务器仍保留旧镜像 ID 用于失败回滚。
+- [改进] 项目 Compose 直接适配 `deployment.env` 与 `state/` 部署布局，保留 `dsa-server` 名称并复用配置指定的 Nginx 网络，默认启动 HTTP Web 服务，定时分析改为显式启动，不再需要服务器维护另一份 Compose。
+- [改进] 离线镜像包携带项目 Compose 模板，更新时统一安装至 `docker/docker-compose.yml`，自动保留既有端口、数据挂载、容器名和网络，明确注入 `deployment.env` 并在重建前预检 OAuth；保留旧部署快照及失败回滚，不管理 Nginx/Caddy。
+- [改进] GitHub OAuth 默认支持公网 HTTP 回调，新增服务器配置 `GITHUB_OAUTH_ALLOW_HTTP=false` 可要求仅使用 HTTPS（含本机）；保留白名单、state、PKCE 与 Cookie 安全策略，HTTP 策略开关不会单独启用认证。
+- [修复] 离线镜像更新兼容经典 Docker 与 containerd 镜像存储的 ID 差异，依据归档配置及 OCI 引用链校验镜像身份；已有镜像包仅需替换更新脚本，无需重新构建上传大包。
+- [改进] 新增 Windows Docker 镜像离线打包脚本 `scripts/package-image.cmd` 与 Linux 更新脚本 `scripts/update-image.sh`，支持架构校验、SHA256 校验、保留服务器 Compose/环境配置、HTTP 健康验证及失败时切回旧镜像；镜像回滚不撤销应用数据变化。
+- [修复] GitHub OAuth 身份查询失败时记录脱敏的请求阶段、异常类型、HTTP 状态码和限流标记，便于区分网络故障与 API 限流；不记录令牌、授权码或响应正文。
+- [改进] 新增 Windows 本地启动脚本 `scripts/start-local.cmd`，复用项目虚拟环境和前端自动构建逻辑，检查成功后仅监听本机启动 Web 服务。
+- [改进] Web 登录改用 GitHub OAuth（state、PKCE、`read:user`/`user:email`），仅允许服务器白名单用户登录并展示头像、已验证邮箱；配置不完整时拒绝登录，旧密码会话失效，密码登录及网页修改认证入口停用。
+- [改进] 新增可双击、无参数的 Windows 部署打包脚本 `scripts/package-deploy.bat`，使用项目 Python 环境将当前工作区源码打包为以 Git 项目名命名的 `.tar.gz`，排除本地配置、数据和依赖，并与服务器完整包升级流程衔接。
+- [改进] 新增无参数完整部署包升级脚本 `scripts/upgrade-docker.sh`，校验上传包后先构建镜像，再备份并整体替换旧目录，恢复 Compose、环境配置、Dockerfile 与挂载数据后重启 `server`；保留完整旧版本和挂载快照，提供启动前失败恢复与升级阶段清单。
+- [chore] 移除未接入主流程的指定作者头条抓取脚本及其内置请求凭据，配置模板恢复默认关闭 WebUI。
 - [新功能] Web / Desktop 通知设置支持录入、修改和删除股票邮件通知分组，复用现有编号环境变量与配置保存、冲突检测和热重载流程。
 - [修复] 新增幂等的 `py_mini_racer.MiniRacer` 线程安全保护（`src/utils/mini_racer_guard.py`），在应用初始化与数据源层串行化 V8 isolate 创建与求值调用，避免多线程并发分析（`MAX_WORKERS > 1`）时触发原生 `SIGTRAP` 崩溃（Fixes #2586）。
 - [新功能] 新增 agent-agnostic 插件市场入口（`.agents/plugins/marketplace.json`）与 Codex/Claude Code 插件清单（`plugin/`）；将 `stock_analyzer` 正文迁至 `plugin/skills/stock_analyzer/SKILL.md`，根目录 `SKILL.md` 保留为普通文件副本（兼容 `core.symlinks=false` / OpenClaw）；技能明确要求驱动已部署的 DSA 检出，示例先 `chdir` 到检出根目录以共用相对库路径与复盘锁，大盘复盘在支持 `send_notification` 时默认不推送且对旧检出安全拒绝回退；HTTP 对话内个股须 `"notify": false`、大盘复盘须 `"send_notification": false`（`MarketReviewRequest` 亦接受 `notify` 别名）；只读 MCP 仍按完整指南在 checkout 中手动配置（不写入插件包）。

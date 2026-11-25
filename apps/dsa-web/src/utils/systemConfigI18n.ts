@@ -355,7 +355,7 @@ const fieldDescriptionMap: Record<string, string> = {
   SCHEDULE_RUN_IMMEDIATELY: '仅影响 schedule 模式启动时是否立即触发一次任务；保存 Web 设置不会触发执行。',
   TRADING_DAY_CHECK_ENABLED: '启用交易日校验，非交易日自动跳过定时分析。',
   WEBUI_HOST: 'WebUI 服务监听地址（默认通常为 0.0.0.0）。',
-  ADMIN_AUTH_ENABLED: '启用 Web 管理端账号密码登录校验。',
+  ADMIN_AUTH_ENABLED: '启用 GitHub OAuth 与用户白名单校验；相关配置由服务器管理。',
   TRUST_X_FORWARDED_FOR: '启用后信任反向代理透传的 X-Forwarded-For 源 IP。',
   RUN_IMMEDIATELY: '程序启动后立即执行一次分析任务。',
   MARKET_REVIEW_ENABLED: '是否启用大盘复盘流程。',

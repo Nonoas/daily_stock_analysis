@@ -1,12 +1,14 @@
 import type React from 'react';
 import { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import { createParsedApiError, getParsedApiError, type ParsedApiError } from '../api/error';
-import { authApi } from '../api/auth';
+import { authApi, type GitHubUser } from '../api/auth';
 import { useStockPoolStore } from '../stores';
 
 type AuthContextValue = {
   authEnabled: boolean;
   loggedIn: boolean;
+  oauthConfigured?: boolean;
+  user?: GitHubUser | null;
   passwordSet: boolean;
   passwordChangeable: boolean;
   setupState: 'enabled' | 'password_retained' | 'no_password';
@@ -41,6 +43,8 @@ function extractLoginError(err: unknown): ParsedApiError {
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [authEnabled, setAuthEnabled] = useState(false);
   const [loggedIn, setLoggedIn] = useState(false);
+  const [oauthConfigured, setOauthConfigured] = useState(false);
+  const [user, setUser] = useState<GitHubUser | null>(null);
   const [passwordSet, setPasswordSet] = useState(false);
   const [passwordChangeable, setPasswordChangeable] = useState(false);
   const [setupState, setSetupState] = useState<'enabled' | 'password_retained' | 'no_password'>('no_password');
@@ -54,6 +58,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const status = await authApi.getStatus();
       setAuthEnabled(status.authEnabled);
       setLoggedIn(status.loggedIn);
+      setOauthConfigured(status.oauthConfigured ?? false);
+      setUser(status.user ?? null);
       setPasswordSet(status.passwordSet ?? false);
       setPasswordChangeable(status.passwordChangeable ?? false);
       setSetupState(status.setupState);
@@ -64,6 +70,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setLoadError(getParsedApiError(err));
       setAuthEnabled(false);
       setLoggedIn(false);
+      setOauthConfigured(false);
+      setUser(null);
       setPasswordSet(false);
       setPasswordChangeable(false);
       setSetupState('no_password');
@@ -129,6 +137,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       value={{
         authEnabled,
         loggedIn,
+        oauthConfigured,
+        user,
         passwordSet,
         passwordChangeable,
         setupState,

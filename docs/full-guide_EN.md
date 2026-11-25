@@ -430,12 +430,17 @@ For the notification baseline, diagnostics, and deployment notes, see [Notificat
 | Variable | Description | Default |
 |--------|------|--------|
 | `STOCK_LIST` | Watchlist codes (comma-separated) | - |
+| `ADMIN_AUTH_ENABLED` | Require GitHub OAuth and an allowlisted GitHub login. Any nonempty GitHub authentication setting also enables protection. Incomplete configuration blocks sign-in; password login and Web auth toggles have been removed. | `false` |
+| `GITHUB_OAUTH_CLIENT_ID` / `GITHUB_OAUTH_CLIENT_SECRET` | GitHub OAuth App credentials, managed on the server. The client secret is never sent to browser code. | empty |
+| `GITHUB_OAUTH_CALLBACK_URL` | HTTP/HTTPS callback ending in `/api/v1/auth/github/callback`, matching the GitHub OAuth App configuration exactly. | empty |
+| `GITHUB_OAUTH_ALLOW_HTTP` | Allow HTTP callbacks by default; `false` requires HTTPS, including loopback. Server-managed; this flag alone does not enable authentication, disable the HTTP listener or redirect traffic. HTTP sessions are unencrypted. | `true` |
+| `GITHUB_ALLOWED_USERS` | Comma-separated, case-insensitive GitHub logins, not emails or organizations. Empty or invalid allowlists deny sign-in. | empty |
 | `MAX_WORKERS` | Concurrent threads | `3` |
 | `PER_STOCK_TIMEOUT_SECONDS` | Per-stock deadline for batch analysis, in seconds. At that deadline the analysis is cancelled and later results are discarded. The slot becomes available after the associated workers exit. Set to `0` to disable the limit. | `300` |
 | `GUARD_ENABLED` | Enable the optional [fastapi-guard](https://github.com/Guard-Core/fastapi-guard) security middleware: per-IP rate limiting, IP allow/block list, path/query/header screening (every detection category except `ssrf`, because browsers send the page address as `Referer` and guard-core 4.4.0 flags localhost and LAN addresses in it) and automatic scanner bans. It complements (does not replace) the login failure limiter. State is in process memory, no Redis needed; restart after changing. CORS stays with the existing CORS middleware, which wraps the guard, so 429/403 responses carry CORS headers. Needs the `fastapi-guard` package (listed in `requirements.txt`; enabling without it fails at startup with a clear error) | `false` |
 | `GUARD_RATE_LIMIT` / `GUARD_RATE_LIMIT_WINDOW` | Max requests per IP per window (seconds); static assets and health checks count, and a cold WebUI page load is 14 to 34 requests | `300` / `60` |
 | `GUARD_WHITELIST` / `GUARD_BLACKLIST` | IP allow/block list (comma separated, CIDR ok). When the allowlist is set, every other IP gets 403; listed IPs are exempt from the rate limit | empty |
-| `GUARD_TRUSTED_PROXIES` | Only used when `TRUST_X_FORWARDED_FOR=true`: proxies allowed to set `X-Forwarded-For` (default loopback only). Only their rightmost entry is used, and the header from any other peer is ignored (the login limiter's `get_client_ip()` also takes the rightmost entry but does not check the peer). When `TRUST_X_FORWARDED_FOR` is `false` the TCP peer address is always used. With the guard on, the built-in entry points (`main.py`, `server.py`, `webui.py`) make Uvicorn trust the same proxies, or none when `TRUST_X_FORWARDED_FOR=false`, so behind a reverse proxy set `TRUST_X_FORWARDED_FOR=true`. With the guard on and `TRUST_X_FORWARDED_FOR=false`, Uvicorn's proxy-header handling is off, so behind an HTTPS reverse proxy the login cookie is set without `Secure` (`_cookie_params()` reads `request.url.scheme`); set `TRUST_X_FORWARDED_FOR=true` behind an HTTPS proxy. If you start `uvicorn` yourself, match `FORWARDED_ALLOW_IPS` to this list or pass `--no-proxy-headers`. If the proxy is not on loopback (for example a Docker bridge address) list it here, otherwise all users share one rate-limit key | `127.0.0.1,::1` |
+| `GUARD_TRUSTED_PROXIES` | Only used when `TRUST_X_FORWARDED_FOR=true`: proxies allowed to set `X-Forwarded-For` (default loopback only). Only their rightmost entry is used, and the header from any other peer is ignored (the login limiter's `get_client_ip()` also takes the rightmost entry but does not check the peer). When `TRUST_X_FORWARDED_FOR` is `false` the TCP peer address is always used. With the guard on, the built-in entry points (`main.py`, `server.py`, `webui.py`) make Uvicorn trust the same proxies, or none when `TRUST_X_FORWARDED_FOR=false`, so behind a reverse proxy set `TRUST_X_FORWARDED_FOR=true`. GitHub login cookies use `Secure` whenever the configured OAuth callback is HTTPS, independently of proxy-header inference. If you start `uvicorn` yourself, match `FORWARDED_ALLOW_IPS` to this list or pass `--no-proxy-headers`. If the proxy is not on loopback (for example a Docker bridge address) list it here, otherwise all users share one rate-limit key | `127.0.0.1,::1` |
 | `GUARD_SCAN_BODY` | Also scan request bodies (default: path, query and headers only) | `false` |
 | `GUARD_PASSIVE_MODE` | Log only, never block; useful for a trial run | `false` |
 | `MARKET_REVIEW_ENABLED` | Enable market review | `true` |
@@ -487,6 +492,20 @@ The GitHub Actions daily analysis workflow reads the Variable first and then the
 > - Per-stock analysis, realtime quote priority, and sector rankings fallback remain unchanged.
 
 ---
+
+### GitHub OAuth login
+
+`GITHUB_OAUTH_ALLOW_HTTP` defaults to `true`. Set it to `false` on the server to reject all HTTP callbacks, including loopback; HTTPS remains supported. Missing or empty values allow HTTP, while invalid boolean values reject HTTP. This server-managed policy is not editable through Web/API or configuration import and does not enable auth by itself. It controls callback URL validation, not HTTP listening or automatic HTTPS redirects. HTTP sessions are unencrypted; HTTP cookies retain HttpOnly and SameSite=Lax, while HTTPS cookies remain Secure. Restart after changing server settings, or recreate Docker containers after changing injected environment variables. Local, Docker, API/Web and opt-in Desktop browser login use the same policy; CLI analysis and GitHub Actions analysis jobs are unaffected.
+
+If sign-in returns `oauthError=unavailable`, inspect the backend warning: `stage` identifies `token_exchange`, `profile`, or `emails` (`unknown` when endpoint metadata is unavailable); `error` is the exception type, `status` is the HTTP status or `None`, and `rate_limited=True` indicates HTTP 429 or HTTP 403 with zero remaining quota. Logs omit credentials, authorization codes, full URLs, exception messages and response bodies. Check the backend's network/proxy route for timeouts; an unauthenticated API probe exhausting its quota does not prove that authenticated OAuth requests are also rate-limited.
+
+Create an OAuth App under GitHub **Settings > Developer settings > OAuth Apps**. Set its authorization callback URL to your public HTTP or HTTPS origin plus `/api/v1/auth/github/callback`, and use that exact URL in `GITHUB_OAUTH_CALLBACK_URL`. Configure the client ID, client secret and a nonempty `GITHUB_ALLOWED_USERS` on the server before deploying this version. The requested scopes are `read:user` and `user:email`; a verified email is required and private verified emails are supported. No repository permission is requested.
+
+Any GitHub client credential, callback URL or allowlist setting enables protection even if `ADMIN_AUTH_ENABLED=false`; incomplete settings deny sign-in. Server-managed auth fields cannot be changed through the WebUI or configuration import. Keep credentials out of frontend build variables. The local packaging script excludes `.env`, so add the settings to the server's `deployment.env` for custom deployments and recreate containers to refresh injected environment variables. Startup environment values take priority over the runtime env file.
+
+Signed sessions contain the GitHub identity but never the OAuth access token. Each authenticated API request checks the current allowlist again. Apply allowlist changes by reloading configuration or restarting the process; removed users' sessions then stop working. Logout invalidates all sessions across workers. Persist the `DATABASE_PATH` directory for `.session_secret`.
+
+Password setup, password login, password changes and Web auth toggles are removed. Legacy POST auth endpoints return 410, or 401 first when middleware requires a session. Existing password sessions cannot authenticate. The old password hash file is retained for reverting to an earlier release; no database migration is required. Desktop local access is unchanged when auth is unconfigured; if GitHub protection is enabled, complete login and use the workspace in the system browser, with an OAuth callback matching that local backend address and port. Browser sessions are not copied into Electron. CLI analysis and GitHub Actions jobs do not need OAuth credentials.
 
 ## Docker Deployment
 
@@ -648,6 +667,42 @@ docker-compose -f ./docker/docker-compose.yml up -d server
 
 ### Manual Image Build
 
+The updater supports Compose 2.26.1: authentication preflight, recreation and rollback use generated `pull_policy: never`, rather than incompatible `compose run --pull` flags.
+
+Packaging always builds and exports `daily_stock_analysis:latest` into `dist/docker-image/`, replacing the same tag and package files. Rebuilding still occurs; replacing a tag does not update a running container, so run the updater or recreate the Compose service. Build caches and rollback images are not automatically pruned.
+
+For direct deployment, copy the repository file to the server's `docker/docker-compose.yml`, keeping `deployment.env` and `state/` in its parent directory. Add `DSA_PROXY_NETWORK=<existing-nginx-network>` to `deployment.env`, alongside OAuth credentials. Defaults retain project `dsa-remote`, container `dsa-server`, the four `state/` data directories, and application config `/app/data/runtime.env`. Web starts by default; explicitly target `analyzer` for scheduled analysis. `DSA_WEB_PORT` controls the host port and `API_PORT` the container port (both default to `8000`). `DSA_TRUST_PROXY` defaults to false. No Caddy or listener on Nginx's 80/443 ports is added.
+
+```bash
+docker compose --env-file deployment.env -f docker/docker-compose.yml \
+  up -d --no-build --pull never server
+```
+
+After successful startup, delete the root legacy `compose.yaml` and `.image-update.override.json`. Retain `deployment.env`, `state/`, and any new `.image-update.override.yaml` generated by the updater. Compose is version-controlled; the image tag is fixed at `daily_stock_analysis:latest` without `DSA_IMAGE`; external network names and secrets remain instance settings. If the updater generated an instance override, include it in later manual commands.
+
+Across Docker versions, classic image stores may report the config digest while containerd stores may report an OCI manifest/index digest. After verifying the archive SHA256, the updater checks the digest reference chain for the same image config, then validates the loaded image and running container; identity verification is not bypassed. If an older updater reports `Loaded image ID differs from package metadata`, upload the latest `scripts/update-image.sh` and rerun it; keep the existing `image.tar` and `image.json`. New packages record the exported config digest as `image_id`.
+
+Offline deployment now uses the repository's `docker/docker-compose.yml` as its base. Run `scripts/package-image.cmd` (default `linux/amd64`; pass `linux/arm64` for ARM64) with Docker Desktop in Linux mode and Python 3.10+ in the project `.venv` or `venv`. It packages the current working tree, including uncommitted changes. Upload all four files from `dist/docker-image/`: `image.tar`, `image.json`, `compose.template.yml` (an unchanged copy of the repository Compose), and `update-image.sh`. Keep the server's `deployment.env`, `state/`, and original Compose files for the initial migration. Run:
+
+```bash
+bash update-image.sh
+```
+
+The server needs Python 3.9+, Docker permissions and Compose 2.24.4+. The verified template is installed at `docker/docker-compose.yml`; generated `.image-update.override.yaml` holds instance-specific settings. Initial migration retains the existing project/container names, ports, bind mounts, networks, command, explicit environment, and application `ENV_FILE` (for example `/app/data/runtime.env`). Paths within the deployment become relative for portability. Named-volume deployments and ambiguous matching services require manual review. Fresh deployments use `state/data`, `state/logs`, `state/reports` and `state/longbridge_tokens`; image-provided strategies are not hidden by an empty host directory.
+
+`deployment.env` supplies both Compose interpolation and container environment variables. The updater sets Compose-only `DSA_ENV_FILE` to this file; the project Compose defaults to `../deployment.env`. This is distinct from application `ENV_FILE`. Explicit old `environment` entries retain precedence over `env_file`; correct any explicitly empty OAuth entries first. Before recreation, a temporary candidate container checks the actual auth configuration; enabled but invalid OAuth settings stop the update while the old service remains running.
+
+Only `server` is recreated: analyzer, Caddy and existing Nginx/proxy services are not started, stopped or modified. After confirming HTTP access, Nginx forwarding and login, archive the root legacy `compose.yaml` and `.image-update.override.json`; subsequent updates no longer read them. Back up `deployment.env`, `state/` and `.image-update.override.yaml` for a host migration, then upload the four generated package files. Mounts outside the deployment and external networks must also be available on the new host. Review unused legacy proxy containers separately.
+
+For manual management, always include the base and instance override:
+
+```bash
+DSA_ENV_FILE="$PWD/deployment.env" docker compose --env-file deployment.env \
+  -f docker/docker-compose.yml -f .image-update.override.yaml ps
+```
+
+Archive/image identity checks and in-container HTTP health checks protect updates. Failures attempt to restore the old complete Compose configuration and image retained in private `.image-update-backups/`, with a printed manual rollback command. Rollback does not undo application data changes; back up business data first. Old images remain available. Legacy three-file packages still use the original Compose flow; the `package-deploy.bat` / `upgrade-docker.sh` source-upgrade flow is for the old layout and must not be mixed with this one.
+
 ```bash
 docker build -f docker/Dockerfile -t stock-analysis .
 docker run -d \
@@ -687,6 +742,8 @@ python scripts/check_env.py --config
 ```
 
 ### Command Line Arguments
+
+For local Web startup on Windows, install the Python dependencies above and Node.js/npm versions supported by `apps/dsa-web/package.json`, then double-click `scripts/start-local.cmd` or invoke it from any directory. It uses the root `.venv` (or `venv`), reads the existing `.env`, and reuses automatic frontend installation/building. Preparation failures stop startup and keep the error window open. The server binds only to `127.0.0.1`, using `WEBUI_PORT` (default `8000`); open the URL printed in the terminal and press Ctrl+C to stop. With `WEBUI_AUTO_BUILD=false`, build the frontend beforehand. Existing authentication and enabled schedules remain in effect.
 
 ```bash
 python main.py                        # Full analysis (stocks + market review)

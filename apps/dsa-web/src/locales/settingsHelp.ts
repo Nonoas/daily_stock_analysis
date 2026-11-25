@@ -770,11 +770,11 @@ const settingsHelpZhCN: SettingsHelpMap = {
   },
   'settings.system.ADMIN_AUTH_ENABLED': {
     title: 'Web 登录保护',
-    summary: '启用 WebUI 管理员密码保护。',
-    usage: '请通过 WebUI 的认证设置入口启用或关闭；忘记密码可运行 python -m src.auth reset_password。',
-    valueNotes: ['直连公网、局域网共享或反向代理部署时建议启用。', '该字段在通用配置页仅作说明展示，避免绕过认证设置流程。'],
+    summary: '启用 GitHub OAuth 和用户白名单保护。',
+    usage: '在服务器配置 GITHUB_OAUTH_CLIENT_ID、GITHUB_OAUTH_CLIENT_SECRET、GITHUB_OAUTH_CALLBACK_URL 和 GITHUB_ALLOWED_USERS。',
+    valueNotes: ['任一 GitHub 认证项非空也会强制登录，配置不完整时拒绝登录。', '白名单按 GitHub 用户名匹配，网页不可修改认证配置。'],
     impact: ['影响 WebUI 登录、设置页访问和管理操作保护。'],
-    notes: ['启用前请确认部署环境可以持久化认证数据；手动改 .env 后需要重启进程或使用认证设置流程刷新状态。'],
+    notes: ['持久化 DATABASE_PATH 所在目录以保存签名密钥；启动环境变更后重启或重建容器。旧密码会话不再有效。'],
   },
   'settings.system.TRUST_X_FORWARDED_FOR': {
     title: '信任 X-Forwarded-For',
@@ -2069,11 +2069,11 @@ const settingsHelpEnUS: SettingsHelpMap = {
   },
   'settings.system.ADMIN_AUTH_ENABLED': {
     title: 'Web Login Protection',
-    summary: 'Enables admin password protection for WebUI.',
-    usage: 'Use the WebUI auth settings entry to enable or disable this. Reset with python -m src.auth reset_password if needed.',
-    valueNotes: ['Recommended for public, shared LAN, or reverse-proxy deployments.', 'This field is shown read-only in the generic config page to avoid bypassing the auth settings flow.'],
+    summary: 'Enables GitHub OAuth and a GitHub user allowlist.',
+    usage: 'Configure GITHUB_OAUTH_CLIENT_ID, GITHUB_OAUTH_CLIENT_SECRET, GITHUB_OAUTH_CALLBACK_URL and GITHUB_ALLOWED_USERS on the server.',
+    valueNotes: ['Any nonempty GitHub setting also enables protection; incomplete configuration blocks login.', 'The allowlist matches GitHub logins. Authentication settings cannot be edited in the WebUI.'],
     impact: ['Affects WebUI login, settings access, and admin operations.'],
-    notes: ['Make sure auth data is persisted in the deployment environment. Manual .env edits require a process restart or the auth settings flow to refresh state.'],
+    notes: ['Persist the DATABASE_PATH directory for the signing secret. Restart or recreate containers after startup environment changes. Old password sessions are invalid.'],
   },
   'settings.system.TRUST_X_FORWARDED_FOR': {
     title: 'Trust X-Forwarded-For',

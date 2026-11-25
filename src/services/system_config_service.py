@@ -2485,6 +2485,9 @@ class SystemConfigService:
         issues: List[Dict[str, Any]] = []
         updated_map: Dict[str, str] = {}
 
+        from src.auth import GITHUB_SERVER_CONFIG_KEYS
+
+        server_auth_keys = {"ADMIN_AUTH_ENABLED", *GITHUB_SERVER_CONFIG_KEYS}
         for item in items:
             key = item["key"].upper()
             value = item["value"]
@@ -2492,6 +2495,13 @@ class SystemConfigService:
             is_sensitive = bool(field_schema.get("is_sensitive", False))
 
             if is_sensitive and value == mask_token and saved_config_map.get(key):
+                continue
+
+            if key in server_auth_keys and value != effective_map.get(key, ""):
+                issues.append({
+                    "key": key, "code": "auth_server_managed", "severity": "error",
+                    "message": "GitHub authentication and its whitelist must be configured on the server.",
+                })
                 continue
 
             updated_map[key] = value

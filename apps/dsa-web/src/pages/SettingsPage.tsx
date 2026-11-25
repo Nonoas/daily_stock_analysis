@@ -13,7 +13,6 @@ import { ApiErrorAlert, Button, ConfirmDialog, EmptyState } from '../components/
 import {
   AgentBackendStatusPanel,
   AuthSettingsCard,
-  ChangePasswordCard,
   GenerationBackendStatusPanel,
   IntelligentImport,
   LLMChannelEditor,
@@ -159,6 +158,11 @@ const SCHEDULER_SETTING_KEYS = new Set([
 ]);
 const SYSTEM_HIDDEN_KEYS = new Set([
   'ADMIN_AUTH_ENABLED',
+  'GITHUB_OAUTH_CLIENT_ID',
+  'GITHUB_OAUTH_CLIENT_SECRET',
+  'GITHUB_OAUTH_CALLBACK_URL',
+  'GITHUB_OAUTH_ALLOW_HTTP',
+  'GITHUB_ALLOWED_USERS',
   ...SCHEDULER_SETTING_KEYS,
 ]);
 const BASE_HIDDEN_KEYS = new Set([
@@ -788,7 +792,7 @@ const SchedulerSettingsCard: React.FC<SchedulerSettingsCardProps> = ({
 };
 
 const SettingsPage: React.FC = () => {
-  const { authEnabled, passwordChangeable } = useAuth();
+  const { authEnabled } = useAuth();
   const location = useLocation();
   const { language: uiLanguage, t } = useUiLanguage();
   const [envBackupActionError, setEnvBackupActionError] = useState<ParsedApiError | null>(null);
@@ -1862,9 +1866,6 @@ const SettingsPage: React.FC = () => {
                 />
               </SettingsSectionCard>
               </div>
-            ) : null}
-            {!trimmedSearchQuery && activeCategory === 'system' && passwordChangeable ? (
-              <ChangePasswordCard />
             ) : null}
             {!trimmedSearchQuery && activeCategory === 'notification' ? (
               <EmailGroupEditor

@@ -1,8 +1,19 @@
 import apiClient from './index';
 
+export type GitHubUser = {
+  id: number;
+  login: string;
+  name: string;
+  avatarUrl: string;
+  email: string;
+};
+
 export type AuthStatusResponse = {
   authEnabled: boolean;
   loggedIn: boolean;
+  provider?: 'github';
+  oauthConfigured?: boolean;
+  user?: GitHubUser | null;
   passwordSet?: boolean;
   passwordChangeable?: boolean;
   setupState: 'enabled' | 'password_retained' | 'no_password';

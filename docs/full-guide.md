@@ -508,14 +508,18 @@ daily_stock_analysis/
 | 变量名 | 说明 | 默认值 |
 |--------|------|--------|
 | `STOCK_LIST` | 自选股代码（逗号分隔） | - |
-| `ADMIN_AUTH_ENABLED` | Web 登录：设为 `true` 启用密码保护；首次访问在网页设置初始密码，可在「系统设置 > 修改密码」修改；忘记密码执行 `python -m src.auth reset_password`。Web 的 `.env` 备份导入导出仅在开启该开关后可用（桌面端不受此限制）。 | `false` |
+| `ADMIN_AUTH_ENABLED` | 设为 `true` 强制 GitHub OAuth 与用户名白名单校验；任一 GitHub 认证项非空也会开启保护，配置不完整时拒绝登录。旧密码登录与网页开关已停用。配置步骤见[GitHub 登录说明](deploy-webui-cloud.md#github-登录与白名单)。 | `false` |
+| `GITHUB_OAUTH_CLIENT_ID` / `GITHUB_OAUTH_CLIENT_SECRET` | GitHub OAuth App 凭据，仅在服务器配置；Secret 不发送到前端。 | 空 |
+| `GITHUB_OAUTH_CALLBACK_URL` | HTTP/HTTPS 回调地址，路径为 `/api/v1/auth/github/callback`，必须与 GitHub OAuth App 配置一致。 | 空 |
+| `GITHUB_OAUTH_ALLOW_HTTP` | 默认允许 HTTP 回调；设为 `false` 后仅允许 HTTPS（包括本机）。仅在服务器配置，不单独开启登录保护，不控制 HTTP 监听或自动跳转；HTTP 会话不加密。 | `true` |
+| `GITHUB_ALLOWED_USERS` | GitHub 用户名白名单，英文逗号分隔、忽略大小写；空或含非法用户名时拒绝登录，不是邮箱或组织名。 | 空 |
 | `TRUST_X_FORWARDED_FOR` | 单层可信反向代理部署时设为 `true`，取 `X-Forwarded-For` 最右值作为真实客户端 IP（用于登录限流等）；直连公网时保持 `false` 防伪造。多级代理/CDN 场景下限流 key 可能退化为边缘代理 IP，需额外评估 | `false` |
 | `MAX_WORKERS` | 并发线程数 | `3` |
 | `PER_STOCK_TIMEOUT_SECONDS` | 批量分析的单股时限（秒）。达到单股时限后取消分析，丢弃后续结果，槽位在相关工作线程退出后复用。设为 `0` 关闭限制 | `300` |
 | `GUARD_ENABLED` | 启用可选的 [fastapi-guard](https://github.com/Guard-Core/fastapi-guard) 安全中间件：按 IP 限流、IP 白/黑名单、路径/查询参数/请求头特征拦截（除 `ssrf` 外的全部检测类别：浏览器会把页面地址作为 `Referer` 发送，而 guard-core 4.4.0 会把其中的 localhost 和局域网地址判为 ssrf）、扫描器自动封禁。与登录失败限流叠加而非替代；状态在进程内存中，无需 Redis；修改后需重启。CORS 仍由原 CORS 中间件处理（位于 guard 外层，429/403 也带 CORS 头）。需要依赖 `fastapi-guard`（已在 `requirements.txt`，未安装时启用会报错） | `false` |
 | `GUARD_RATE_LIMIT` / `GUARD_RATE_LIMIT_WINDOW` | 每个 IP 在窗口（秒）内的最大请求数，静态资源与健康检查同样计数，冷缓存加载一个 WebUI 页面约 14 至 34 个请求 | `300` / `60` |
 | `GUARD_WHITELIST` / `GUARD_BLACKLIST` | IP 白/黑名单（逗号分隔，支持 CIDR）。白名单非空时，名单外 IP 一律 403；名单内 IP 不受限流约束 | 空 |
-| `GUARD_TRUSTED_PROXIES` | 仅在 `TRUST_X_FORWARDED_FOR=true` 时生效：可信反向代理地址，默认仅本机回环。只有来自这些地址的连接才采信 `X-Forwarded-For` 最右值，其它来源伪造的该首部被忽略（登录限流的 `get_client_ip()` 同样取最右值，但不校验代理来源）；`TRUST_X_FORWARDED_FOR` 为 `false` 时一律使用 TCP 对端地址。启用 guard 后，内置启动入口（`main.py`、`server.py`、`webui.py`）让 Uvicorn 只信任同一组代理，`TRUST_X_FORWARDED_FOR=false` 时关闭 Uvicorn 的代理头处理，因此反向代理后部署请设 `TRUST_X_FORWARDED_FOR=true`；启用 guard 且 `TRUST_X_FORWARDED_FOR=false` 时 Uvicorn 的代理头处理被关闭，HTTPS 反向代理后登录 cookie 会不带 `Secure` 标志（`_cookie_params()` 读取的是 `request.url.scheme`），因此 HTTPS 代理后请设 `TRUST_X_FORWARDED_FOR=true`；自行用 `uvicorn` 命令启动时，请让 `FORWARDED_ALLOW_IPS` 与本项一致或加 `--no-proxy-headers`。Docker 中代理不在回环时请填代理地址，否则所有用户会共用同一个限流 key | `127.0.0.1,::1` |
+| `GUARD_TRUSTED_PROXIES` | 仅在 `TRUST_X_FORWARDED_FOR=true` 时生效：可信反向代理地址，默认仅本机回环。只有来自这些地址的连接才采信 `X-Forwarded-For` 最右值，其它来源伪造的该首部被忽略（登录限流的 `get_client_ip()` 同样取最右值，但不校验代理来源）；`TRUST_X_FORWARDED_FOR` 为 `false` 时一律使用 TCP 对端地址。启用 guard 后，内置启动入口（`main.py`、`server.py`、`webui.py`）让 Uvicorn 只信任同一组代理，`TRUST_X_FORWARDED_FOR=false` 时关闭 Uvicorn 的代理头处理，因此反向代理后部署请设 `TRUST_X_FORWARDED_FOR=true`；GitHub 回调地址配置为 HTTPS 时，登录 Cookie 始终带 `Secure` 标志，不依赖代理头推断；自行用 `uvicorn` 命令启动时，请让 `FORWARDED_ALLOW_IPS` 与本项一致或加 `--no-proxy-headers`。Docker 中代理不在回环时请填代理地址，否则所有用户会共用同一个限流 key | `127.0.0.1,::1` |
 | `GUARD_SCAN_BODY` | 是否同时扫描请求体（默认只检查路径、查询参数和请求头） | `false` |
 | `GUARD_PASSIVE_MODE` | 仅记录日志不拦截，便于先观察 | `false` |
 | `MARKET_REVIEW_ENABLED` | 启用大盘复盘 | `true` |
@@ -705,6 +709,50 @@ docker-compose -f ./docker/docker-compose.yml up -d server
 
 ### 手动构建镜像
 
+更新脚本兼容 Compose 2.26.1：认证预检、服务重建和回滚通过生成配置中的 `pull_policy: never` 禁止拉取，不使用 `compose run --pull` 等不兼容参数。
+
+打包脚本始终构建并导出 `daily_stock_analysis:latest`，输出固定为 `dist/docker-image/`，再次打包覆盖同名标签和包文件，不再生成时间戳版本。镜像重建仍会发生；旧运行容器不会因标签覆盖自动更新，仍须执行更新脚本或 Compose 重建服务。构建缓存与回滚镜像不自动清理。
+
+直接部署时，将本项目文件放到服务器 `docker/docker-compose.yml`，与它相邻的上级目录保留 `deployment.env` 和 `state/`。在已有 `deployment.env` 中补充 `DSA_PROXY_NETWORK=<已有 Nginx Docker 网络名>`，OAuth 四项也放在该文件。默认项目名 `dsa-remote`、容器名 `dsa-server`，数据挂载为 `state/data`、`state/logs`、`state/reports`、`state/longbridge_tokens`，运行配置文件为容器内 `/app/data/runtime.env`。默认启动 Web，定时分析须显式指定 `analyzer`。HTTP 宿主机端口沿用 `DSA_WEB_PORT`，容器端口由 `API_PORT` 控制；均未设置时为 `8000`。`DSA_TRUST_PROXY` 默认关闭，仅在可信代理后按需开启。不启动 Caddy，也不占用 Nginx 的 80/443 端口。
+
+```bash
+# 在部署根目录执行，不再引用根目录旧 Compose 或旧覆盖文件。
+docker compose --env-file deployment.env -f docker/docker-compose.yml \
+  up -d --no-build --pull never server
+```
+
+新服务成功启动后可删除根目录旧 `compose.yaml` 和旧 `.image-update.override.json`，不要删除 `deployment.env`、`state/` 或已由新更新脚本生成的 `.image-update.override.yaml`。Git 管理 Compose，镜像固定使用 `daily_stock_analysis:latest`，无需配置 `DSA_IMAGE`；外部网络名和凭据由 `deployment.env` 管理。Nginx 网络可用 `docker network ls` 查找，沿用原部署使用的网络。若使用新更新脚本生成的实例覆盖文件，后续手动命令还需附带该文件。
+
+离线包跨 Docker 版本更新时，经典镜像存储可能返回配置摘要，containerd 镜像存储可能返回 OCI manifest/index 摘要。更新脚本在 SHA256 包校验后，验证同一镜像配置对应的摘要引用链，再检查加载镜像及运行容器身份；不会跳过身份校验。若旧脚本报 `Loaded image ID differs from package metadata`，只需上传最新版 `scripts/update-image.sh` 覆盖服务器脚本并重跑，现有 `image.tar` 和 `image.json` 可保留。新打包脚本使用归档内配置摘要写入 `image_id`。
+
+Windows 离线部署统一使用本仓库的 `docker/docker-compose.yml`，不再要求服务器单独维护 `compose.yaml`。运行 `scripts/package-image.cmd`（默认 `linux/amd64`，ARM64 使用 `scripts\package-image.cmd linux/arm64`），要求 Docker Desktop 使用 Linux 容器、项目 `.venv` 或 `venv` 中有 Python 3.10+。打包包含当前工作区（含未提交改动），生成的 `dist/docker-image/` 包含四个文件：
+
+- `image.tar`：镜像归档；
+- `image.json`：镜像及 Compose 模板的校验信息；
+- `compose.template.yml`：项目 Compose 的原样副本，不应在导出目录单独维护；
+- `update-image.sh`：服务器更新与迁移入口。
+
+将四个文件上传到现有部署目录，保留原有 `deployment.env`、`state/` 和首次迁移时的旧 Compose 文件，然后运行：
+
+```bash
+bash update-image.sh
+```
+
+服务器需要 Python 3.9+、Docker 权限、Docker Compose 2.24.4+。脚本校验包和模板后，将模板安装至 `docker/docker-compose.yml`，生成 `.image-update.override.yaml` 保存镜像及实例差异；基础配置由 Git 中的项目文件维护。初次迁移从运行容器及旧 Compose 获取现有项目名、容器名、端口、bind 数据挂载、网络、命令和显式环境配置，保留 `ENV_FILE`（例如 `/app/data/runtime.env`）；项目内路径转换为相对路径，方便搬迁。使用 named volume 的部署或同目录存在多个匹配服务时停止，须人工确认。新部署采用 `state/data`、`state/logs`、`state/reports` 和 `state/longbridge_tokens`，策略从镜像读取，不用空宿主机目录覆盖。
+
+`deployment.env` 同时用于 Compose 插值和容器环境注入。脚本自动设置 Compose 专用的 `DSA_ENV_FILE` 指向它；项目 Compose 默认读取 `../deployment.env`。`DSA_ENV_FILE` 不等于应用的 `ENV_FILE`，后者是容器内可保存运行配置的文件。原 Compose 中显式的同名 `environment` 仍优先于 `env_file`，若旧配置写死了空 OAuth 值，须先修正旧配置。GitHub 四项仅写在宿主机文件而未通过 `env_file` 注入时，容器无法读取；本流程会在重建前用候选镜像和实际环境检查认证，启用保护但配置无效时停止，不替换旧服务。
+
+仅重建 `server`；不启动 analyzer、Caddy，也不停止或改动现有 Nginx/旧代理。迁移后确认 HTTP、Nginx 转发及登录正常，即可将根目录旧 `compose.yaml` 与旧 `.image-update.override.json` 移入备份，后续更新不再读取它们。保留 `deployment.env`、`state/` 和新的 `.image-update.override.yaml`；跨主机迁移时复制这些实例数据，再上传项目生成的四个文件。部署目录之外的挂载与外部网络仍需在新主机提供。原有代理容器若已不用，应单独确认后清理。
+
+手动管理新部署时必须指定项目基础文件及实例覆盖文件：
+
+```bash
+DSA_ENV_FILE="$PWD/deployment.env" docker compose --env-file deployment.env \
+  -f docker/docker-compose.yml -f .image-update.override.yaml ps
+```
+
+新镜像经加载和身份校验后才切换；Compose 检查外还会检查容器内 HTTP 健康接口。失败时尝试用私有 `.image-update-backups/` 中保存的旧完整 Compose 与镜像恢复，并打印手动回滚命令。镜像/配置回滚不撤销业务数据变化，升级前应备份数据。旧镜像不自动删除。旧三文件格式仍按原有 Compose 更新；`package-deploy.bat` / `upgrade-docker.sh` 的源码升级流程只适用于旧部署布局，不要与新流程混用。
+
 ```bash
 docker build -f docker/Dockerfile -t stock-analysis .
 docker run -d \
@@ -746,6 +794,8 @@ python scripts/check_env.py --config
 **智能导入依赖**：`pypinyin`（名称→代码拼音匹配）和 `openpyxl`（Excel .xlsx 解析）已包含在 `requirements.txt` 中，执行上述 `pip install -r requirements.txt` 时会自动安装。若使用智能导入（图片/CSV/Excel/剪贴板）功能，请确保依赖已正确安装；缺失时可能报 `ModuleNotFoundError`。
 
 ### 命令行参数
+
+Windows 本地启动 Web：安装上述 Python 依赖及符合 `apps/dsa-web/package.json` 要求的 Node.js/npm 后，双击 `scripts/start-local.cmd`，或从任意目录执行该脚本。脚本优先使用根目录 `.venv`，其次使用 `venv`，读取现有 `.env`，复用前端自动安装/构建逻辑；准备失败时停止并保留错误窗口。服务仅监听 `127.0.0.1`，端口沿用 `WEBUI_PORT`（默认 `8000`），按终端地址打开浏览器，使用 Ctrl+C 停止。`WEBUI_AUTO_BUILD=false` 时须预先构建前端；认证和已启用的定时任务沿用现有配置。
 
 ```bash
 python main.py                        # 完整分析（个股 + 大盘复盘）

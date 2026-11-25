@@ -1,482 +1,271 @@
 # -*- coding: utf-8 -*-
-"""Authentication endpoints for Web admin login."""
+"""GitHub OAuth login and whitelist-protected admin sessions."""
 
 from __future__ import annotations
 
 import logging
-import os
+from urllib.parse import urlencode, urlsplit
 
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse, Response
-from pydantic import BaseModel, Field
+from fastapi.responses import JSONResponse, RedirectResponse, Response
+import httpx
 
-from api.deps import get_system_config_service
 from src.auth import (
     COOKIE_NAME,
-    SESSION_MAX_AGE_HOURS_DEFAULT,
-    change_password,
+    OAUTH_COOKIE_NAME,
+    OAUTH_STATE_MAX_AGE,
     check_rate_limit,
     clear_rate_limit,
+    create_oauth_state,
     create_session,
     get_client_ip,
-    has_stored_password,
+    get_github_auth_config,
+    get_session_user,
     is_auth_enabled,
-    is_password_changeable,
-    is_password_set,
     record_login_failure,
-    refresh_auth_state,
     rotate_session_secret,
-    set_initial_password,
-    verify_password,
-    verify_stored_password,
-    verify_session,
+    safe_login_redirect,
+    session_max_age,
+    verify_oauth_state,
 )
-from src.config import Config, setup_env
-from src.core.config_manager import ConfigManager
 
 logger = logging.getLogger(__name__)
-
 router = APIRouter()
+_PRIVATE_HEADERS = {"Cache-Control": "no-store", "Pragma": "no-cache", "Referrer-Policy": "no-referrer"}
 
 
-class LoginRequest(BaseModel):
-    """Login request body. For first-time setup use password + password_confirm."""
-
-    model_config = {"populate_by_name": True}
-
-    password: str = Field(default="", description="Admin password")
-    password_confirm: str | None = Field(default=None, alias="passwordConfirm", description="Confirm (first-time)")
+class GitHubOAuthError(Exception):
+    """Public error code only; tokens and provider response bodies must never be logged."""
 
 
-class ChangePasswordRequest(BaseModel):
-    """Change password request body."""
-
-    model_config = {"populate_by_name": True}
-
-    current_password: str = Field(default="", alias="currentPassword")
-    new_password: str = Field(default="", alias="newPassword")
-    new_password_confirm: str = Field(default="", alias="newPasswordConfirm")
-
-
-class AuthSettingsRequest(BaseModel):
-    """Update auth enablement and initial password settings."""
-
-    model_config = {"populate_by_name": True}
-
-    auth_enabled: bool = Field(alias="authEnabled")
-    password: str = Field(default="")
-    password_confirm: str | None = Field(default=None, alias="passwordConfirm")
-    current_password: str = Field(default="", alias="currentPassword")
-
-
-def _cookie_params(request: Request) -> dict:
-    """Build cookie params including Secure based on request."""
-    secure = False
-    if os.getenv("TRUST_X_FORWARDED_FOR", "false").lower() == "true":
-        proto = request.headers.get("X-Forwarded-Proto", "").lower()
-        secure = proto == "https"
-    else:
-        # Check URL scheme when not behind proxy
-        secure = request.url.scheme == "https"
-
-    try:
-        max_age_hours = int(os.getenv("ADMIN_SESSION_MAX_AGE_HOURS", str(SESSION_MAX_AGE_HOURS_DEFAULT)))
-    except ValueError:
-        max_age_hours = SESSION_MAX_AGE_HOURS_DEFAULT
-    max_age = max_age_hours * 3600
-
-    return {
-        "httponly": True,
-        "samesite": "lax",
-        "secure": secure,
-        "path": "/",
-        "max_age": max_age,
+def _log_github_lookup_failure(error: Exception) -> None:
+    """Log only fixed endpoint labels and HTTP metadata, never exception messages."""
+    response = error.response if isinstance(error, httpx.HTTPStatusError) else None
+    request = None
+    if isinstance(error, httpx.HTTPError):
+        try:
+            request = error.request
+        except RuntimeError:
+            pass  # An HTTPX error constructed without a request has no endpoint metadata.
+    stages = {
+        ("github.com", "/login/oauth/access_token"): "token_exchange",
+        ("api.github.com", "/user"): "profile",
+        ("api.github.com", "/user/emails"): "emails",
     }
-
-
-def _apply_auth_enabled(enabled: bool, request: Request | None = None) -> bool:
-    """Persist auth toggle to .env and reload runtime config."""
-    manager_applied = False
-    if request is not None:
-        try:
-            service = get_system_config_service(request)
-            service.apply_simple_updates(
-                updates=[("ADMIN_AUTH_ENABLED", "true" if enabled else "false")],
-                mask_token="******",
-            )
-            manager_applied = True
-        except Exception as exc:
-            logger.warning(
-                "Failed to apply auth toggle via shared SystemConfigService, falling back: %s",
-                exc,
-                exc_info=True,
-            )
-            manager_applied = False
-
-    if not manager_applied:
-        try:
-            manager = ConfigManager()
-            manager.apply_updates(
-                updates=[("ADMIN_AUTH_ENABLED", "true" if enabled else "false")],
-                sensitive_keys=set(),
-                mask_token="******",
-            )
-            manager_applied = True
-        except Exception as exc:
-            logger.error("Failed to apply auth toggle via ConfigManager: %s", exc, exc_info=True)
-            manager_applied = False
-
-    if not manager_applied:
-        return False
-
-    Config.reset_instance()
-    setup_env(override=True)
-    refresh_auth_state()
-    return True
-
-
-def _password_set_for_response(auth_enabled: bool) -> bool:
-    """Avoid exposing stored-password state when auth is disabled."""
-    return is_password_set() if auth_enabled else False
-
-
-def _set_session_cookie(response: Response, session_value: str, request: Request) -> None:
-    """Attach the admin session cookie to a response."""
-    params = _cookie_params(request)
-    response.set_cookie(
-        key=COOKIE_NAME,
-        value=session_value,
-        httponly=params["httponly"],
-        samesite=params["samesite"],
-        secure=params["secure"],
-        path=params["path"],
-        max_age=params["max_age"],
+    stage = stages.get((request.url.host, request.url.path), "unknown") if request else "unknown"
+    status = response.status_code if response is not None else None
+    rate_limited = status == 429 or (
+        status == 403 and response.headers.get("x-ratelimit-remaining") == "0"
+    )
+    logger.warning(
+        "GitHub OAuth identity lookup failed: stage=%s error=%s status=%s rate_limited=%s",
+        stage, type(error).__name__, status, rate_limited,
     )
 
 
+def _cookie_params(request: Request) -> dict:
+    callback = get_github_auth_config().callback_url
+    try:
+        callback_https = urlsplit(callback).scheme == "https"
+    except ValueError:
+        callback_https = False
+    secure = callback_https or request.url.scheme == "https"
+    return {"httponly": True, "samesite": "lax", "secure": secure, "path": "/", "max_age": session_max_age()}
+
+
+def _set_session_cookie(response: Response, session_value: str, request: Request) -> None:
+    response.set_cookie(key=COOKIE_NAME, value=session_value, **_cookie_params(request))
+
+
 def _get_auth_status_dict(request: Request | None = None) -> dict:
-    """Helper to build consistent auth status response body."""
-    auth_enabled = is_auth_enabled()
-    logged_in = False
-    if auth_enabled and request:
-        cookie_val = request.cookies.get(COOKIE_NAME)
-        logged_in = verify_session(cookie_val) if cookie_val else False
-
-    # setupState determination:
-    # - enabled: auth is active
-    # - password_retained: auth disabled but password exists
-    # - no_password: auth disabled and no password exists
-    if auth_enabled:
-        setup_state = "enabled"
-    elif has_stored_password():
-        setup_state = "password_retained"
-    else:
-        setup_state = "no_password"
-
+    enabled = is_auth_enabled()
+    user = get_session_user(request.cookies.get(COOKIE_NAME)) if enabled and request else None
     return {
-        "authEnabled": auth_enabled,
-        "loggedIn": logged_in,
-        "passwordSet": _password_set_for_response(auth_enabled),
-        "passwordChangeable": is_password_changeable() if auth_enabled else False,
-        "setupState": setup_state,
+        "authEnabled": enabled,
+        "loggedIn": user is not None,
+        "provider": "github",
+        "oauthConfigured": get_github_auth_config().configured,
+        "user": user,
+        # Retained response fields let old clients render a safe, non-password state.
+        "passwordSet": False,
+        "passwordChangeable": False,
+        "setupState": "enabled" if enabled else "no_password",
     }
 
 
-@router.get(
-    "/status",
-    summary="Get auth status",
-    description="Returns whether auth is enabled and if the current request is logged in.",
-)
+def _login_error(request: Request, error: str, redirect: str = "/") -> RedirectResponse:
+    response = RedirectResponse(
+        "/login?" + urlencode({"oauthError": error, "redirect": safe_login_redirect(redirect)}),
+        status_code=303, headers=_PRIVATE_HEADERS,
+    )
+    params = _cookie_params(request)
+    for cookie in (OAUTH_COOKIE_NAME, COOKIE_NAME):
+        response.delete_cookie(cookie, path="/", secure=params["secure"], httponly=True, samesite="lax")
+    return response
+
+
+@router.get("/status", summary="Get GitHub authentication status")
 async def auth_status(request: Request):
-    """Return authEnabled, loggedIn, passwordSet, passwordChangeable, setupState without requiring auth."""
-    return _get_auth_status_dict(request)
+    return JSONResponse(_get_auth_status_dict(request), headers=_PRIVATE_HEADERS)
 
 
-@router.post(
-    "/settings",
-    summary="Update auth settings",
-    description=(
-        "Enable or disable password login. "
-        "When enabling without an existing password, password + passwordConfirm are required. "
-        "When re-enabling with a stored password, currentPassword is required. "
-        "When disabling auth (authEnabled=false) while auth is currently enabled, "
-        "currentPassword is required to re-authenticate the admin — a valid session cookie "
-        "alone is NOT enough for this high-risk action (CSRF / session-hijacking hardening "
-        "for Issue #1970)."
-    ),
-)
-async def auth_update_settings(request: Request, body: AuthSettingsRequest):
-    """Manage auth enablement from the settings page."""
-    target_enabled = body.auth_enabled
-    current_enabled = is_auth_enabled()
-    stored_password_exists = has_stored_password()
-
-    password = (body.password or "").strip()
-    confirm = (body.password_confirm or "").strip()
-    current_password = (body.current_password or "").strip()
-
-    if target_enabled:
-        if password or confirm:
-            if stored_password_exists:
-                return JSONResponse(
-                    status_code=400,
-                    content={
-                        "error": "password_already_set",
-                        "message": "已存在管理员密码，请启用认证后通过修改密码功能更新",
-                    },
-                )
-            if not password:
-                return JSONResponse(
-                    status_code=400,
-                    content={"error": "password_required", "message": "请输入要设置的管理员密码"},
-                )
-            if password != confirm:
-                return JSONResponse(
-                    status_code=400,
-                    content={"error": "password_mismatch", "message": "两次输入的密码不一致"},
-                )
-            if has_stored_password():
-                return JSONResponse(
-                    status_code=400,
-                    content={
-                        "error": "password_already_set",
-                        "message": "已存在管理员密码，请启用认证后通过修改密码功能更新",
-                    },
-                )
-            err = set_initial_password(password)
-            if err:
-                return JSONResponse(
-                    status_code=400,
-                    content={"error": "invalid_password", "message": err},
-                )
-        elif not stored_password_exists:
-            return JSONResponse(
-                status_code=400,
-                content={"error": "password_required", "message": "开启密码登录前请先设置密码"},
-            )
-        else:
-            # P1 Vulnerability Fix: Enforce current-password check independent of global cached flag
-            # We must verify they actually possess a valid admin session, otherwise an attacker
-            # could hit a race condition when auth becomes enabled mid-flight.
-            # This triggers whenever trying to enable/keep enabled an existing auth setup.
-            cookie_val = request.cookies.get(COOKIE_NAME)
-            # if target_enabled is True here, they are requesting to enable or keep auth enabled
-            is_valid_session = cookie_val and verify_session(cookie_val)
-            
-            if not is_valid_session:
-                if not current_password:
-                    return JSONResponse(
-                        status_code=400,
-                        content={"error": "current_required", "message": "重新开启认证前请输入当前密码"},
-                    )
-                ip = get_client_ip(request)
-                if not check_rate_limit(ip):
-                    return JSONResponse(
-                        status_code=429,
-                        content={
-                            "error": "rate_limited",
-                            "message": "Too many failed attempts. Please try again later.",
-                        },
-                    )
-                if not verify_stored_password(current_password):
-                    record_login_failure(ip)
-                    return JSONResponse(
-                        status_code=401,
-                        content={"error": "invalid_password", "message": "当前密码错误"},
-                    )
-                clear_rate_limit(ip)
-    else:
-        # target_enabled is False here: caller wants to disable auth.
-        # High-risk action: require current admin password re-authentication even when
-        # the request carries a cryptographically valid session cookie. A leaked session
-        # cookie must never be enough to flip the system into an unauthenticated state
-        # (CSRF / session-hijacking hardening for Issue #1970).
-        if current_enabled:
-            if not current_password:
-                return JSONResponse(
-                    status_code=400,
-                    content={"error": "current_required", "message": "关闭认证前请输入当前密码"},
-                )
-            ip = get_client_ip(request)
-            if not check_rate_limit(ip):
-                return JSONResponse(
-                    status_code=429,
-                    content={
-                        "error": "rate_limited",
-                        "message": "Too many failed attempts. Please try again later.",
-                    },
-                )
-            if not verify_stored_password(current_password):
-                record_login_failure(ip)
-                return JSONResponse(
-                    status_code=401,
-                    content={"error": "invalid_password", "message": "当前密码错误"},
-                )
-            clear_rate_limit(ip)
-
-    if target_enabled != current_enabled:
-        if not _apply_auth_enabled(target_enabled, request=request):
-            return JSONResponse(
-                status_code=500,
-                content={"error": "internal_error", "message": "Failed to update auth settings"},
-            )
-        if not rotate_session_secret():
-            rollback_ok = _apply_auth_enabled(current_enabled, request=request)
-            if not rollback_ok:
-                logger.error("Failed to roll back auth state after session secret rotation failure")
-            return JSONResponse(
-                status_code=500,
-                content={"error": "internal_error", "message": "Failed to rotate session secret"},
-            )
-    else:
-        if not _apply_auth_enabled(target_enabled, request=request):
-            return JSONResponse(
-                status_code=500,
-                content={"error": "internal_error", "message": "Failed to update auth settings"},
-            )
-
-    if target_enabled:
-        session_val = create_session()
-        if not session_val:
-            rollback_ok = _apply_auth_enabled(current_enabled, request=request)
-            if not rollback_ok:
-                logger.error("Failed to roll back auth state after session creation failure")
-            return JSONResponse(
-                status_code=500,
-                content={"error": "internal_error", "message": "Failed to create session"},
-            )
-        # We manually set loggedIn=True because the cookie is being set in this response
-        # and won't be visible in request.cookies until the NEXT request.
-        content = _get_auth_status_dict(request)
-        content["loggedIn"] = True
-        resp = JSONResponse(content=content)
-        _set_session_cookie(resp, session_val, request)
-        return resp
-
-    resp = JSONResponse(content=_get_auth_status_dict(request))
-    resp.delete_cookie(key=COOKIE_NAME, path="/")
-    return resp
-
-
-
-@router.post(
-    "/login",
-    summary="Login or set initial password",
-    description="Verify password and set session cookie. If password not set yet, accepts password+passwordConfirm.",
-)
-async def auth_login(request: Request, body: LoginRequest):
-    """Verify password or set initial password, set cookie on success. Returns 401 or 429 on failure."""
-    if not is_auth_enabled():
+@router.get("/github/login", summary="Start GitHub OAuth login")
+async def github_login(request: Request, redirect: str = "/"):
+    config = get_github_auth_config()
+    if not is_auth_enabled() or not config.configured:
         return JSONResponse(
-            status_code=400,
-            content={"error": "auth_disabled", "message": "Authentication is not configured"},
+            status_code=503,
+            content={"error": "github_not_configured", "message": "GitHub OAuth and a nonempty whitelist must be configured"},
+            headers=_PRIVATE_HEADERS,
         )
-
-    password = (body.password or "").strip()
-    if not password:
+    if not check_rate_limit(get_client_ip(request)):
+        return _login_error(request, "rate_limited", redirect)
+    state, cookie, challenge = create_oauth_state(redirect)
+    if not cookie:
         return JSONResponse(
-            status_code=400,
-            content={"error": "password_required", "message": "请输入密码"},
+            status_code=503, content={"error": "session_unavailable", "message": "Cannot create a secure login session"},
+            headers=_PRIVATE_HEADERS,
         )
+    url = "https://github.com/login/oauth/authorize?" + urlencode({
+        "client_id": config.client_id,
+        "redirect_uri": config.callback_url,
+        "scope": "read:user user:email",
+        "state": state,
+        "code_challenge": challenge,
+        "code_challenge_method": "S256",
+    })
+    response = RedirectResponse(url, status_code=303, headers=_PRIVATE_HEADERS)
+    params = _cookie_params(request)
+    params["max_age"] = OAUTH_STATE_MAX_AGE
+    response.set_cookie(OAUTH_COOKIE_NAME, cookie, **params)
+    return response
 
-    ip = get_client_ip(request)
-    if not check_rate_limit(ip):
-        return JSONResponse(
-            status_code=429,
-            content={
-                "error": "rate_limited",
-                "message": "Too many failed attempts. Please try again later.",
+
+async def _github_user(code: str, verifier: str) -> dict:
+    config = get_github_auth_config()
+    async with httpx.AsyncClient(timeout=httpx.Timeout(10, connect=5), follow_redirects=False) as client:
+        token_response = await client.post(
+            "https://github.com/login/oauth/access_token",
+            headers={"Accept": "application/json"},
+            data={
+                "client_id": config.client_id,
+                "client_secret": config.client_secret,
+                "redirect_uri": config.callback_url,
+                "code": code,
+                "code_verifier": verifier,
             },
         )
+        token_response.raise_for_status()
+        token = token_response.json()
+        if (not isinstance(token, dict) or not isinstance(token.get("access_token"), str)
+                or not token["access_token"] or str(token.get("token_type", "")).lower() != "bearer"):
+            raise GitHubOAuthError("authorization_failed")
+        headers = {
+            "Accept": "application/vnd.github+json",
+            "Authorization": "Bearer " + token["access_token"],
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "daily-stock-analysis",
+        }
+        profile_response = await client.get("https://api.github.com/user", headers=headers)
+        profile_response.raise_for_status()
+        profile = profile_response.json()
+        if not isinstance(profile, dict) or type(profile.get("id")) is not int or profile["id"] <= 0:
+            raise GitHubOAuthError("authorization_failed")
+        login = profile.get("login")
+        if not isinstance(login, str) or login.lower() not in config.allowed_users:
+            raise GitHubOAuthError("not_allowed")
+        emails_response = await client.get(
+            "https://api.github.com/user/emails", headers=headers, params={"per_page": 100},
+        )
+        if emails_response.status_code == 403:
+            raise GitHubOAuthError("email_required")
+        emails_response.raise_for_status()
+        emails = emails_response.json()
+        if not isinstance(emails, list):
+            raise GitHubOAuthError("email_required")
+        verified = [
+            entry for entry in emails if isinstance(entry, dict) and entry.get("verified") is True
+            and isinstance(entry.get("email"), str) and entry["email"].strip()
+        ]
+        if not verified:
+            raise GitHubOAuthError("email_required")
+        email = next((entry["email"] for entry in verified if entry.get("primary") is True), verified[0]["email"])
+        if len(email) > 320:
+            raise GitHubOAuthError("email_required")
+        avatar = profile.get("avatar_url")
+        if (not isinstance(avatar, str) or len(avatar) > 512 or urlsplit(avatar).scheme != "https"
+                or urlsplit(avatar).hostname != "avatars.githubusercontent.com"):
+            raise GitHubOAuthError("authorization_failed")
+        name = profile.get("name")
+        return {
+            "id": profile["id"], "login": login, "name": name[:128] if isinstance(name, str) else login,
+            "avatarUrl": avatar, "email": email.strip(),
+        }
 
-    password_set = is_password_set()
 
-    if not password_set:
-        # First-time setup: require passwordConfirm
-        confirm = (body.password_confirm or "").strip()
-        if password != confirm:
-            record_login_failure(ip)
-            return JSONResponse(
-                status_code=400,
-                content={"error": "password_mismatch", "message": "Passwords do not match"},
-            )
-        err = set_initial_password(password)
-        if err:
-            record_login_failure(ip)
-            return JSONResponse(
-                status_code=400,
-                content={"error": "invalid_password", "message": err},
-            )
-    else:
-        if not verify_password(password):
-            record_login_failure(ip)
-            return JSONResponse(
-                status_code=401,
-                content={"error": "invalid_password", "message": "密码错误"},
-            )
-
+@router.get("/github/callback", summary="Complete GitHub OAuth login")
+async def github_callback(request: Request):
+    ip = get_client_ip(request)
+    if not get_github_auth_config().configured:
+        return _login_error(request, "not_configured")
+    if not check_rate_limit(ip):
+        return _login_error(request, "rate_limited")
+    state = verify_oauth_state(
+        request.cookies.get(OAUTH_COOKIE_NAME, ""), request.query_params.get("state", ""),
+    )
+    if not state:
+        record_login_failure(ip)
+        return _login_error(request, "invalid_state")
+    redirect = safe_login_redirect(state.get("redirect"))
+    if request.query_params.get("error"):
+        record_login_failure(ip)
+        return _login_error(request, "denied", redirect)
+    code = request.query_params.get("code", "")
+    if not code or len(code) > 1024:
+        record_login_failure(ip)
+        return _login_error(request, "authorization_failed", redirect)
+    try:
+        user = await _github_user(code, state["verifier"])
+    except GitHubOAuthError as exc:
+        record_login_failure(ip)
+        return _login_error(request, str(exc), redirect)
+    except (httpx.HTTPError, ValueError) as exc:
+        # Never log the token response, authorization code, secret or provider response body.
+        _log_github_lookup_failure(exc)
+        record_login_failure(ip)
+        return _login_error(request, "unavailable", redirect)
+    session = create_session(user)
+    if not session:
+        return _login_error(request, "session_unavailable", redirect)
     clear_rate_limit(ip)
-    session_val = create_session()
-    if not session_val:
-        return JSONResponse(
-            status_code=500,
-            content={"error": "internal_error", "message": "Failed to create session"},
-        )
-
-    resp = JSONResponse(content={"ok": True})
-    _set_session_cookie(resp, session_val, request)
-    return resp
+    response = RedirectResponse(redirect, status_code=303, headers=_PRIVATE_HEADERS)
+    _set_session_cookie(response, session, request)
+    response.delete_cookie(OAUTH_COOKIE_NAME, path="/", secure=_cookie_params(request)["secure"],
+                           httponly=True, samesite="lax")
+    return response
 
 
-@router.post(
-    "/change-password",
-    summary="Change password",
-    description="Change password. Requires valid session.",
-)
-async def auth_change_password(body: ChangePasswordRequest):
-    """Change password. Requires login."""
-    if not is_password_changeable():
-        return JSONResponse(
-            status_code=400,
-            content={"error": "not_changeable", "message": "Password cannot be changed via web"},
-        )
-
-    current = (body.current_password or "").strip()
-    new_pwd = (body.new_password or "").strip()
-    new_confirm = (body.new_password_confirm or "").strip()
-
-    if not current:
-        return JSONResponse(
-            status_code=400,
-            content={"error": "current_required", "message": "请输入当前密码"},
-        )
-    if new_pwd != new_confirm:
-        return JSONResponse(
-            status_code=400,
-            content={"error": "password_mismatch", "message": "两次输入的新密码不一致"},
-        )
-
-    err = change_password(current, new_pwd)
-    if err:
-        return JSONResponse(
-            status_code=400,
-            content={"error": "invalid_password", "message": err},
-        )
-    return Response(status_code=204)
+@router.post("/login", deprecated=True)
+@router.post("/settings", deprecated=True)
+@router.post("/change-password", deprecated=True)
+async def password_auth_removed():
+    """Old clients cannot initialize passwords, disable authentication or bypass the whitelist."""
+    return JSONResponse(
+        status_code=410,
+        content={"error": "github_auth_required", "message": "Use GitHub OAuth; manage the whitelist on the server"},
+        headers=_PRIVATE_HEADERS,
+    )
 
 
-@router.post(
-    "/logout",
-    summary="Logout",
-    description="Clear session cookie.",
-)
+@router.post("/logout", summary="Log out and invalidate active sessions")
 async def auth_logout(request: Request):
-    """Clear session cookie."""
     if is_auth_enabled() and not rotate_session_secret():
         return JSONResponse(
-            status_code=500,
-            content={"error": "internal_error", "message": "Failed to invalidate session"},
+            status_code=503, content={"error": "session_unavailable", "message": "Cannot invalidate session"},
+            headers=_PRIVATE_HEADERS,
         )
-    resp = Response(status_code=204)
-    resp.delete_cookie(key=COOKIE_NAME, path="/")
-    return resp
+    response = Response(status_code=204, headers=_PRIVATE_HEADERS)
+    params = _cookie_params(request)
+    for cookie in (COOKIE_NAME, OAUTH_COOKIE_NAME):
+        response.delete_cookie(cookie, path="/", secure=params["secure"], httponly=True, samesite="lax")
+    return response

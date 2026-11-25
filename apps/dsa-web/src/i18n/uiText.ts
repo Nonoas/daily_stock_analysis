@@ -1,6 +1,20 @@
 export type UiLanguage = 'zh' | 'en';
 
 const zh = {
+  'login.githubTitle': 'GitHub 登录',
+  'login.githubDescription': '仅白名单中的 GitHub 用户可以访问工作台。',
+  'login.githubSubmit': '使用 GitHub 登录',
+  'login.githubPermissions': '授权读取 GitHub 个人资料、头像和邮箱，不申请仓库访问权限。',
+  'login.githubNotConfigured': '请管理员在服务器配置 GitHub OAuth App、回调地址及非空用户白名单。',
+  'login.githubNotAllowed': '当前 GitHub 用户不在白名单中，无法登录。',
+  'login.githubEmailRequired': '请授权邮箱访问，并确认 GitHub 至少有一个已验证邮箱。',
+  'login.githubInvalidState': '登录请求已过期或不匹配，请重新使用 GitHub 登录。',
+  'login.githubDenied': 'GitHub 授权未完成，请重新登录并同意所需权限。',
+  'login.githubUnavailable': '暂时无法完成 GitHub 登录，请稍后重试或联系管理员。',
+  'login.githubRateLimited': '登录尝试过于频繁，请稍后再试。',
+  'login.githubDesktop': '桌面端将打开系统浏览器，登录后请在该浏览器中使用工作台。',
+  'settings.githubAuthDescription': 'GitHub OAuth 与用户白名单保护，替代本地密码登录。',
+  'settings.githubAuthManaged': 'OAuth 密钥和用户白名单由服务器环境配置管理，此处不可关闭或修改。',
   'settings.emailGroupsTitle': '股票邮件通知分组',
   'settings.emailGroupsDescription': '股票代码和邮箱均用英文逗号分隔，填写后点击页面顶部保存。分组股票需包含在自选股中，分析范围由自选股决定。',
   'settings.emailGroupsAdd': '添加分组',
@@ -99,7 +113,7 @@ const zh = {
   'layout.route.usage.title': '用量',
   'layout.logout': '退出',
   'layout.logoutConfirm': '确认退出',
-  'layout.logoutMessage': '确认退出当前登录状态吗？退出后需要重新输入密码。',
+  'layout.logoutMessage': '确认退出登录吗？此操作会撤销当前所有会话，之后需重新通过 GitHub 登录。',
   'layout.logoutSettingsMessage': '退出会丢弃本页未保存的设置，请先保存需要保留的修改。已发出的保存请求不会因退出而撤销。确认退出当前登录状态吗？',
   'layout.logoutTitle': '退出登录',
 
@@ -1042,6 +1056,20 @@ const zh = {
 export type UiTextKey = keyof typeof zh;
 
 const en: Record<UiTextKey, string> = {
+  'login.githubTitle': 'Sign in with GitHub',
+  'login.githubDescription': 'Only GitHub users on the allowlist can access this workspace.',
+  'login.githubSubmit': 'Continue with GitHub',
+  'login.githubPermissions': 'Authorize access to your GitHub profile, avatar and email. No repository access is requested.',
+  'login.githubNotConfigured': 'Ask the administrator to configure the GitHub OAuth App, callback URL and a nonempty user allowlist on the server.',
+  'login.githubNotAllowed': 'This GitHub account is not on the allowlist.',
+  'login.githubEmailRequired': 'Grant email access and ensure your GitHub account has a verified email address.',
+  'login.githubInvalidState': 'The login request expired or did not match. Start GitHub sign-in again.',
+  'login.githubDenied': 'GitHub authorization did not complete. Try again and grant the required permissions.',
+  'login.githubUnavailable': 'GitHub sign-in is temporarily unavailable. Try again later or contact the administrator.',
+  'login.githubRateLimited': 'Too many login attempts. Please try again later.',
+  'login.githubDesktop': 'The desktop app will open your browser. Continue using the workspace in that browser after signing in.',
+  'settings.githubAuthDescription': 'GitHub OAuth and a user allowlist replace local password login.',
+  'settings.githubAuthManaged': 'OAuth credentials and the user allowlist are managed in the server environment and cannot be changed here.',
   'settings.emailGroupsTitle': 'Stock email notification groups',
   'settings.emailGroupsDescription': 'Separate stock codes and email addresses with commas, then save at the top of this page. Group stocks must be in your watchlist, which determines the analysis scope.',
   'settings.emailGroupsAdd': 'Add group',
@@ -1140,7 +1168,7 @@ const en: Record<UiTextKey, string> = {
   'layout.route.usage.title': 'Usage',
   'layout.logout': 'Log out',
   'layout.logoutConfirm': 'Log out',
-  'layout.logoutMessage': 'Log out of the current session? You will need to enter the password again.',
+  'layout.logoutMessage': 'Log out and invalidate all current sessions? Sign in with GitHub again to continue.',
   'layout.logoutSettingsMessage': 'Logging out discards unsaved settings on this page. Save any changes you want to keep first. Requests already sent will not be cancelled by logout. Log out of the current session?',
   'layout.logoutTitle': 'Log out',
 

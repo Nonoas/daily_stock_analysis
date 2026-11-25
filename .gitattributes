@@ -23,6 +23,10 @@ docs/assets/**/*.psd binary
 *.sh text eol=lf
 *.bash text eol=lf
 
+# Windows batch launchers are consumed by cmd.exe.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
 # Dockerfile（包括多阶段或变体）
 Dockerfile text eol=lf
 Dockerfile.* text eol=lf
