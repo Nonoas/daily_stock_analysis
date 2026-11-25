@@ -395,7 +395,7 @@ Web 登录使用 GitHub OAuth，仅白名单中的用户可以取得会话。上
 http://dsa.example.com/api/v1/auth/github/callback
 ```
 
-将域名替换成实际网站域名，且与服务器配置完全一致。公网要求 HTTPS；仅本机回环开发回调允许 HTTP。申请的权限为 `read:user`、`user:email`，用于读取个人资料、头像和邮箱，不申请仓库权限。邮箱必须已验证，可以是私有邮箱。
+将域名替换成实际网站域名，且与服务器配置完全一致；使用非默认端口时也须包含端口。默认允许 HTTP 回调，设置 `GITHUB_OAUTH_ALLOW_HTTP=false` 后要求 HTTPS（包括本机回环地址）。申请的权限为 `read:user`、`user:email`，用于读取个人资料、头像和邮箱，不申请仓库权限。邮箱必须已验证，可以是私有邮箱。
 
 在服务器启动环境、活跃 `.env` 或自定义部署包使用的 `deployment.env` 中配置：
 
@@ -419,6 +419,8 @@ GITHUB_ALLOWED_USERS=your-github-login
 **兼容与恢复**：原密码登录、首次设置密码、修改密码和网页开关认证入口已停用；旧接口 `POST /api/v1/auth/login`、`/settings`、`/change-password` 返回 410（未登录访问受保护接口仍可能先返回 401）。旧密码会话无效，`python -m src.auth reset_password` 不再用于登录。旧密码哈希文件没有删除，回退旧版本时仍可使用；无需数据库迁移。签名密钥继续保存在 `DATABASE_PATH` 所在目录的 `.session_secret`，应持久化整个数据目录。退出登录沿用原有“撤销全部会话”行为，多进程通过重新读取签名密钥立即失效。
 
 本地与 Docker Web 服务共用这套流程；反向代理需正确转发回调路径，HTTPS 回调会令 Cookie 使用 Secure。GitHub Actions 的纯 CLI 分析、通知和报告链路不需要 OAuth 配置。桌面端默认本地免登录不变；如主动启用 GitHub 保护，登录按钮会打开系统浏览器，并在该浏览器使用工作台，浏览器会话不会复制回 Electron 内置窗口。桌面端本地回调须与当前监听地址、端口一致。
+
+若设置页显示 `Failed to load system configuration`，这是后端系统配置接口的错误信息，应查看容器日志中的同名错误和异常堆栈。旧版本的 GitHub Client ID 和回调地址元数据使用了 API 不支持的 `input` 控件类型，会使配置响应校验失败；需更新包含 `text` 类型修复的后端镜像，仅刷新浏览器或修改 OAuth 凭据不能修复此问题。
 
 ---
 

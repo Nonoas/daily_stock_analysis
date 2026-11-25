@@ -18,6 +18,15 @@ from src.core.config_registry import (
 )
 
 
+class TestConfigSchemaContract(unittest.TestCase):
+    """Registry metadata must satisfy the API response schema."""
+
+    def test_registered_schema_matches_api_response(self):
+        from api.v1.schemas.system_config import SystemConfigSchemaResponse
+
+        SystemConfigSchemaResponse.model_validate(build_schema_response())
+
+
 class TestSlackFieldsRegistered(unittest.TestCase):
     """Slack config keys must be present in the registry."""
 

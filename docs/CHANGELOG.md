@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [修复] GitHub OAuth Client ID 和回调地址的配置控件类型改为 API 支持的 `text`，修复系统配置及配置 schema 接口校验失败导致设置页无法加载的问题。
 - [修复] 镜像更新兼容 Docker Compose 2.26.1，移除 `run/up --pull` 参数，改由实例配置 `pull_policy: never` 限定使用已加载的本地镜像，认证预检与回滚保持相同策略。
 - [修复] 镜像更新脚本移除不兼容的 `config --no-env-resolution`，使用常规 Compose 配置解析，并避免将 `deployment.env` 中的动态变量固定在实例覆盖文件中。
 - [改进] 本地镜像打包固定使用 `daily_stock_analysis:latest` 标签并覆盖 `dist/docker-image/` 下的导出文件，项目 Compose 不再需要 `DSA_IMAGE`；服务器仍保留旧镜像 ID 用于失败回滚。
